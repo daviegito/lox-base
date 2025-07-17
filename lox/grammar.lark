@@ -1,52 +1,105 @@
-?start     : program
+?start         : program
+program        : declaration*
 
-program    : stmt*
+// Declarações
+?declaration   : var_decl
+               | function_decl
+               | class_decl
+               | stmt
 
-?stmt      : expr ";"
-           | print_cmd
-           // | if_cmd
-           // | for_cmd
-           // | ...
+var_decl       : "var" VAR ("=" expr)? ";"
+function_decl  : "fun" VAR "(" param_list? ")" block    -> function
+class_decl     : "class" VAR ("<" VAR)? "{" method_decl* "}" -> class_decl
+method_decl    : VAR "(" param_list? ")" block          -> method
 
-print_cmd  : "print" expr ";"
+param_list     : VAR ("," VAR)*
 
-// EXPRESSÕES
-?expr      : test
+// Comandos
+?stmt          : expr_stmt
+               | print_cmd
+               | block
+               | if_cmd
+               | while_cmd
+               | return_cmd
+               | for_cmd
 
-?test      : test "==" cmp  -> eq
-           | test "!=" cmp  -> ne
-           | cmp
+expr_stmt      : expr ";"
+print_cmd      : "print" expr ";"
+block          : "{" declaration* "}"
+if_cmd         : "if" "(" expr ")" stmt ["else" stmt]
+while_cmd      : "while" "(" expr ")" stmt
+return_cmd     : "return" expr? ";"                     -> return_cmd
 
-?cmp       : cmp ">" factor   -> gt
-           | cmp "<" factor   -> lt
-           | cmp ">=" factor  -> ge
-           | cmp "<=" factor  -> le
-           | factor
+// Comando for descomposto em partes opcionais
+for_cmd        : "for" "(" for_init for_cond ";" for_incr ")" stmt
+for_init       : var_decl
+               | expr_stmt
+               | ";"                                     -> empty_init
+for_cond       : expr?                                   -> maybe_cond
+for_incr       : expr?                                   -> maybe_incr
 
-?factor    : factor "+" term  -> add
-           | factor "-" term  -> sub
-           | term
+// Expressões
+?expr          : assignment
 
-?term      : term "*" atom   -> mul
-           | term "/" atom   -> div 
-           | atom
+?assignment    : call "=" assignment                     -> assign_expr
+               | or_
 
-?atom      : NUMBER 
-           | BOOL
-           | VAR
-           | STRING
-           | NIL
-           | "(" cmp ")"
-           | call
+?or_           : and_
+               | or_ "or" and_                           -> or_
 
-call       : VAR "(" params ")"
-params     : [ expr ("," expr )* ]
+?and_          : test
+               | and_ "and" test                         -> and_
 
-BOOL.2     : "true" | "false"
-VAR.1      : /[a-z_]\w*/
-NUMBER     : /([1-9][0-9]*|0)(\.[0-9]+)?/ 
-STRING     : /"[^"]*"/
-NIL.2      : "nil"
-COMMENT    : "//" /[^\n]*/
+?test          : test "==" cmp                           -> eq
+               | test "!=" cmp                           -> ne
+               | cmp
 
+?cmp           : cmp ">" factor                          -> gt
+               | cmp "<" factor                          -> lt
+               | cmp ">=" factor                         -> ge
+               | cmp "<=" factor                         -> le
+               | factor
+
+?factor        : factor "+" term                         -> add
+               | factor "-" term                         -> sub
+               | term
+
+?term          : term "*" unary                          -> mul
+               | term "/" unary                          -> div
+               | unary
+
+?unary         : "!" unary                               -> not_
+               | "-" unary                               -> neg
+               | atom
+
+?atom          : call
+
+// Chamadas, atributos e agrupamentos
+call           : primary call_suffix*
+call_suffix    : "(" params ")"                          -> args
+               | "." VAR                                 -> attr
+
+?primary       : NUMBER
+               | STRING
+               | BOOL
+               | NIL
+               | VAR
+               | THIS                                    -> this
+               | SUPER "." VAR                           -> super
+               | grouping
+
+grouping       : "(" expr ")"
+params         : [ expr ("," expr)* ]
+
+// Tokens
+THIS.2         : "this"
+SUPER.2        : "super"
+BOOL.2         : "true" | "false"
+NIL.2          : "nil"
+VAR.1          : /[A-Za-z_]\w*/
+NUMBER         : /([1-9][0-9]*|0)(\.[0-9]+)?/
+STRING         : /"[^"]*"/
+COMMENT        : "//" /[^\n]*/
+
+// Ignorar espaços e comentários
 %ignore /\s/ | COMMENT

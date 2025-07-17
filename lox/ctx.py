@@ -1,22 +1,26 @@
 import math
 import time
-from dataclasses import field
-from typing import TYPE_CHECKING, Iterator, Optional, TypeVar
-
-from lox.ast import dataclass
-
-if TYPE_CHECKING:
-    from .ast import Value
+from dataclasses import field, dataclass
+from typing import TYPE_CHECKING, Iterator, Optional, TypeVar, cast
 
 T = TypeVar("T")
 ScopeDict = dict[str, "Value"]
 
+def read_number(msg: str) -> float:
+    try:
+        return float(input(msg))
+    except ValueError:
+        print("Digite um número válido!")
+        return read_number(msg)
 
 class _Builtins(dict):
+    # Algumas funções prontas que podem ser usadas direto nos programas
     BUILTINS: dict[str, "Value"] = {
         "sqrt": math.sqrt,
         "clock": time.time,
         "max": max,
+        "read_number": read_number,
+        "is_even": lambda n: n % 2 == 0.0,
     }
 
     def __init__(self):
@@ -28,65 +32,62 @@ class _Builtins(dict):
     def __str__(self) -> str:
         return self.__repr__()
 
-
 BUILTINS = _Builtins()
-
 
 @dataclass
 class Ctx:
     """
-    Contexto de execução. Por enquanto é só um dicionário que armazena nomes
-    das variáveis e seus respectivos valores.
+    Representa o contexto onde variáveis são guardadas.
+    Pode ter um "pai", formando uma cadeia de escopos.
     """
-
     scope: ScopeDict = field(default_factory=dict)
     parent: Optional["Ctx"] = field(default_factory=lambda: Ctx(BUILTINS, None))
 
     @classmethod
     def from_dict(cls, env: ScopeDict) -> "Ctx":
-        """
-        Cria um novo contexto a partir de um dicionário.
-        """
         return cls(env, Ctx(BUILTINS, None))
 
     def __getitem__(self, name: str) -> "Value":
-        """
-        Obtém o valor de uma variável pelo nome.
-        """
         if name in self.scope:
             return self.scope[name]
         elif self.parent is not None:
             return self.parent[name]
-        raise KeyError(f"Variable '{name}' not found in context.")
+        raise KeyError(f"Variável '{name}' não encontrada.")
 
     def __setitem__(self, name: str, value: "Value") -> None:
-        """
-        Define o valor de uma variável pelo nome.
-        """
         if name in self.scope:
             self.scope[name] = value
         elif self.parent is not None:
             self.parent[name] = value
         else:
-            raise KeyError(f"Variable '{name}' not found in context.")
+            raise KeyError(f"Variável '{name}' não encontrada.")
 
     def __contains__(self, name: str) -> bool:
-        """
-        Verifica se uma variável existe no contexto.
-        """
-        return name in self.scope or (self.parent is not None and name in self.parent)
+        return name in self.scope or (self.parent and name in self.parent)
 
     def var_def(self, name: str, value: "Value") -> None:
         """
-        Define uma variável no contexto atual.
+        Declara uma nova variável neste escopo.
         """
         if name in self.scope and not self.is_global():
-            raise KeyError(f"Variable '{name}' already defined in the current scope.")
+            raise KeyError(f"Variável '{name}' já declarada neste escopo.")
         self.scope[name] = value
+
+    def assign(self, key: str, value: "Value"):
+        """
+        Atualiza o valor da variável mais próxima com o nome dado.
+        """
+        ctx = self
+        while ctx is not None:
+            if key in ctx.scope:
+                ctx.scope[key] = value
+                return
+            ctx = ctx.parent
+        raise KeyError(f"Variável '{key}' não encontrada.")
 
     def to_dict(self) -> ScopeDict:
         """
-        Converte o contexto para um dicionário.
+        Retorna todos os escopos fundidos num só dicionário.
         """
         if self.parent is None:
             return self.scope.copy()
@@ -117,33 +118,70 @@ class Ctx:
 
     def pop(self) -> tuple[ScopeDict, "Ctx"]:
         """
-        Remove o escopo mais interno e retorna o contexto atualizado.
+        Remove o escopo mais interno e retorna o restante.
         """
         if self.parent is None:
-            raise RuntimeError("Cannot pop the global scope.")
+            raise RuntimeError("Não é possível remover o escopo global.")
         return self.scope, self.parent
 
-    def push(self, env: ScopeDict) -> "Ctx":
+    def push(self, tos: ScopeDict) -> "Ctx":
         """
-        Empilha um novo escopo no contexto atual.
+        Adiciona um novo escopo no topo.
         """
-        return Ctx(env, self)
+        return Ctx(tos, self)
 
     def is_global(self) -> bool:
-        """
-        Verifica se o contexto atual é o escopo global.
-        """
-        if self.parent is None:
-            return False
-        return self.parent.parent is None
+        return self.parent is not None and self.parent.parent is None
 
+class CtxAlt:
+    """
+    Uma versão alternativa de contexto. Usa uma pilha de dicionários.
+    """
+    def __init__(self, globals: dict | None = None):
+        if globals is None:
+            globals = {}
+        self._stack = [BUILTINS, globals]
+
+    @classmethod
+    def from_dict(cls, env: dict[str, "Value"]) -> "CtxAlt":
+        return cls(env)
+
+    def __getitem__(self, key: str) -> "Value":
+        for env in reversed(self._stack):
+            if key in env:
+                return env[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: "Value"):
+        for env in reversed(self._stack):
+            if key in env:
+                env[key] = value
+                return
+        raise KeyError(key)
+
+    def var_def(self, key: str, value: "Value"):
+        """
+        Declara uma nova variável no escopo atual.
+        """
+        self._stack[-1][key] = value
+
+    def pop(self):
+        """
+        Remove o último escopo da pilha.
+        """
+        return self._stack.pop()
+
+    def push(self, env: dict):
+        """
+        Adiciona um novo escopo ao topo da pilha.
+        """
+        self._stack.append(env)
 
 def pretty_scope(env: ScopeDict, index: int) -> str:
     """
-    Representa um escopo como string.
+    Retorna uma string com as variáveis e valores de um escopo.
     """
     if not env:
         return f"{index:>2}: <empty>"
     items = (f"{k} = {v}" for k, v in sorted(env.items()))
-    data = "; ".join(items)
-    return f"{index:>2}: {data}"
+    return f"{index:>2}: " + "; ".join(items)
